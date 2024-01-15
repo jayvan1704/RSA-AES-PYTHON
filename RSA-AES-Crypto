@@ -1,0 +1,123 @@
+#Importing relevant libraries
+from Crypto.PublicKey import RSA
+from Crypto.Cipher import AES, PKCS1_OAEP
+from Crypto.Signature import pkcs1_15
+from Crypto.Hash import SHA256
+from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+
+# Setting environment variables for Azure key vault resources
+import os
+os.environ['AZURE_CLIENT_ID'] = 'c9a9d4fd-5859-4bd2-9ac5-29fc02a1c169'
+os.environ['Azure_TENANT_ID'] = '20384bc4-c9d2-41a7-9088-27ff8311d51a'
+os.environ['AZURE_CLIENT_SECRET'] = 'r4-8Q~LjokMUmg7DnQ7DQcHz5S-LI87e5xg~ca0H'
+
+# Azure Key Vault configuration
+key_vault_url = 'https://crypto-kvt1.vault.azure.net/'
+secret_name_private_user1 = "PrivateKeyUser1"
+secret_name_public_user1 = "PublicKeyUser1"
+secret_name_private_user2 = "PrivateKeyUser2"
+secret_name_public_user2 = "PublicKeyUser2"
+
+# Generate an RSA key pair, then returns the private and public keys.
+def generate_rsa_keys():
+    key = RSA.generate(1024)  # Generate a 2048-bit RSA key
+    private_key = key.export_key()  # Export the private key
+    public_key = key.publickey().export_key()  # Export the public key
+    return private_key, public_key
+
+# Save key pairs on specified Azure Key Vault
+def save_key_to_azure_key_vault(secret_name, key_value):
+    credential = DefaultAzureCredential()
+    client = SecretClient(vault_url=key_vault_url, credential=credential)
+    client.set_secret(secret_name)
+
+# Read the keys from Azure Ket Vault
+def read_key_from_azure_key_vault(secret_name):
+    credential = DefaultAzureCredential()
+    client = SecretClient(vault_url=key_vault_url, credential=credential)
+    secret = client.get_secret(secret_name)
+    return secret.value
+
+# Encrypting a file using AES encryption. Returns the ciphertext, nonce, and tag.
+def encrypt_file_aes(file_path, aes_key):
+    cipher = AES.new(aes_key, AES.MODE_EAX)  # Create a new AES cipher in EAX mode
+    with open(file_path, 'rb') as f:
+        data = f.read()  # Read the file data
+    ciphertext, tag = cipher.encrypt_and_digest(data)  # Encrypt and digest the data
+    return ciphertext, cipher.nonce, tag
+
+# Decrypting the file encrypted by AES. Returns the decrypted data.
+def decrypt_file_aes(encrypted_data, nonce, tag, aes_key):
+    cipher = AES.new(aes_key, AES.MODE_EAX, nonce)  # Create a new AES cipher with the given nonce
+    data = cipher.decrypt_and_verify(encrypted_data, tag)  # Decrypt and verify the data
+    return data
+
+# Encrypting AES key using RSA public key. Returns the encrypted AES key.
+def encrypt_aes_key_with_rsa(aes_key, public_key):
+    recipient_key = RSA.import_key(public_key)  # Import the recipient's public key
+    cipher_rsa = PKCS1_OAEP.new(recipient_key)  # Create a new RSA cipher
+    enc_aes_key = cipher_rsa.encrypt(aes_key)  # Encrypt the AES key
+    return enc_aes_key
+
+# Decrypting AES key using RSA private key, returns the decrypted AES key.
+def decrypt_aes_key_with_rsa(enc_aes_key, private_key):
+    key = RSA.import_key(private_key)  # Import the private key
+    cipher_rsa = PKCS1_OAEP.new(key)  # Create a new RSA cipher
+    aes_key = cipher_rsa.decrypt(enc_aes_key)  # Decrypt the AES key
+    return aes_key
+
+# Sign data using RSA private key.Returns the signature.
+def sign_data(data, private_key):
+    key = RSA.import_key(private_key)  # Import the signer's private key
+    h = SHA256.new(data)  # Create a SHA-256 hash of the data
+    signature = pkcs1_15.new(key).sign(h)  # Sign the hash
+    return signature
+
+# Verify a signature using RSA public key. Returns True if signature is valid, False otherwise.
+def verify_signature(data, signature, public_key):
+    key = RSA.import_key(public_key)  # Import the signer's public key
+    h = SHA256.new(data)  # Create a SHA-256 hash of the data
+    try:
+        pkcs1_15.new(key).verify(h, signature)  # Verify the signature
+        return True
+    except (ValueError, TypeError):
+        return False
+
+# Generate RSA keys for two users
+private_key_user1, public_key_user1 = generate_rsa_keys()
+private_key_user2, public_key_user2 = generate_rsa_keys()
+
+# Generate AES keys for each user
+aes_key_user1 = os.urandom(32)  # Generate a random 256-bit AES key for User 1
+aes_key_user2 = os.urandom(32)  # Generate a random 256-bit AES key for User 2
+
+# Encrypt a file for User 1
+file_path = "C:\\Users\\Jayvan\\Downloads\\TORRENTS\\TestEncrypFile.docx"  # Path to the file to be encrypted
+encrypted_data, nonce, tag = encrypt_file_aes(file_path, aes_key_user1)  # Encrypt the file
+
+# Encrypt AES key with User 2's public key for sharing
+enc_aes_key_for_user2 = encrypt_aes_key_with_rsa(aes_key_user1, public_key_user2)
+
+# User 2 decrypts AES key with their private key
+decrypted_aes_key_user2 = decrypt_aes_key_with_rsa(enc_aes_key_for_user2, private_key_user2)
+
+# Sign the encrypted file with User 1's private key
+signature = sign_data(encrypted_data, private_key_user1)
+
+
+# Verify the signature with User 1's public key (Can be done by User 2 after decryption)
+is_valid_signature = verify_signature(encrypted_data, signature, public_key_user1)
+
+# Decrypt the file (User 2)
+decrypted_data = decrypt_file_aes(encrypted_data, nonce, tag, decrypted_aes_key_user2)
+
+# Process the decrypted data
+with open('decrypted_file', 'wb') as f:
+    f.write(decrypted_data)
+
+# Output the result of signature verification
+if is_valid_signature:
+    print("Signature is valid.")
+else:
+    print("Signature is invalid.")
